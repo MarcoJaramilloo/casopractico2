@@ -1,0 +1,118 @@
+---
+# Playbook para desplegar la app contador con persistencia en AKS
+# Usa el modulo kubernetes.core.k8s (sin command/shell)
+
+- name: Desplegar app contador con PVC en AKS
+  hosts: localhost
+  connection: local
+
+  vars:
+    acr_server: "acrcp2marcojaramillo.azurecr.io"
+    image_name: "acrcp2marcojaramillo.azurecr.io/app-k8s:casopractico2"
+    namespace: "default"
+
+  tasks:
+
+    - name: Obtener credenciales del cluster AKS
+      ansible.builtin.command:
+        cmd: az aks get-credentials --resource-group rg-casopractico2 --name aks-casopractico2 --overwrite-existing
+      changed_when: true
+
+    - name: Crear PVC para almacenamiento persistente (managed-csi Azure Disk)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: cp2-app-pvc
+            namespace: "{{ namespace }}"
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            storageClassName: managed-csi
+            resources:
+              requests:
+                storage: 1Gi
+
+    - name: Crear Deployment de la app contador
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: cp2-app
+            namespace: "{{ namespace }}"
+            labels:
+              app: cp2-app
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: cp2-app
+            template:
+              metadata:
+                labels:
+                  app: cp2-app
+              spec:
+                securityContext:
+                  fsGroup: 1000
+                containers:
+                  - name: cp2-app
+                    image: "{{ image_name }}"
+                    ports:
+                      - containerPort: 8080
+                    env:
+                      - name: PYTHONUNBUFFERED
+                        value: "1"
+                    volumeMounts:
+                      - name: data-volume
+                        mountPath: /data
+                volumes:
+                  - name: data-volume
+                    persistentVolumeClaim:
+                      claimName: cp2-app-pvc
+
+    - name: Crear Service LoadBalancer para exponer la app a Internet
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: cp2-app-svc
+            namespace: "{{ namespace }}"
+          spec:
+            type: LoadBalancer
+            selector:
+              app: cp2-app
+            ports:
+              - protocol: TCP
+                port: 80
+                targetPort: 8080
+
+    - name: Esperar a que el Deployment este listo
+      kubernetes.core.k8s_info:
+        kind: Deployment
+        name: cp2-app
+        namespace: "{{ namespace }}"
+        wait: true
+        wait_condition:
+          type: Available
+          status: "True"
+        wait_timeout: 120
+
+    - name: Obtener IP publica del Service
+      kubernetes.core.k8s_info:
+        kind: Service
+        name: cp2-app-svc
+        namespace: "{{ namespace }}"
+      register: svc_info
+      until: svc_info.resources[0].status.loadBalancer.ingress is defined
+      retries: 20
+      delay: 15
+
+    - name: Mostrar IP publica de la app en Kubernetes
+      ansible.builtin.debug:
+        msg: "App disponible en: http://{{ svc_info.resources[0].status.loadBalancer.ingress[0].ip }}"

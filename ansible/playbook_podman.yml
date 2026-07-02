@@ -1,0 +1,68 @@
+---
+# Playbook para configurar la VM con Podman y desplegar la app web
+# Usa modulos nativos de Ansible (sin command/shell)
+
+- name: Desplegar app web en Podman sobre VM Azure
+  hosts: podman_vm
+  become: true
+
+  vars:
+    acr_server: "acrcp2marcojaramillo.azurecr.io"
+    acr_username: "acrcp2marcojaramillo"
+    acr_password: "62Anr6CYNvHvmuTS2XajsZJ2xkm36Jn4MRvytpcDFizoDcm6prCBJQQJ99CGACHYHv6Eqg7NAAACAZCRUJWi"
+    image_name: "acrcp2marcojaramillo.azurecr.io/app-web:casopractico2"
+    container_name: "cp2-web"
+
+  tasks:
+
+    - name: Actualizar cache de paquetes apt
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Instalar Podman
+      ansible.builtin.apt:
+        name: podman
+        state: present
+
+    - name: Instalar python3-pip
+      ansible.builtin.apt:
+        name: python3-pip
+        state: present
+
+    - name: Hacer login en el ACR privado
+      containers.podman.podman_login:
+        registry: "{{ acr_server }}"
+        username: "{{ acr_username }}"
+        password: "{{ acr_password }}"
+
+    - name: Descargar imagen desde el ACR
+      containers.podman.podman_image:
+        name: "{{ image_name }}"
+        pull: true
+        force: true
+
+    - name: Crear el contenedor sin restart policy
+      containers.podman.podman_container:
+        name: "{{ container_name }}"
+        image: "{{ image_name }}"
+        state: present
+        ports:
+          - "443:443"
+
+    - name: Generar unidad systemd para el contenedor
+      containers.podman.podman_generate_systemd:
+        name: "{{ container_name }}"
+        dest: /etc/systemd/system/
+        restart_policy: always
+        new: true
+
+    - name: Recargar systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Habilitar y arrancar el servicio
+      ansible.builtin.systemd:
+        name: "container-{{ container_name }}.service"
+        enabled: true
+        state: started
