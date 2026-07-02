@@ -7,9 +7,9 @@ variable "subscription_id" {
 }
 
 variable "location" {
-  description = "Región de Azure (swedencentral obligatorio para cuenta estudiante)"
+  description = "Región eastus2 - única disponible para esta suscripción estudiante"
   type        = string
-  default     = "swedencentral"
+  default     = "eastus2"
 }
 
 variable "resource_group_name" {
